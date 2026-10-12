@@ -1,3 +1,5 @@
+import { isAbsolute } from "node:path";
+
 import * as z from "zod/mini";
 
 const reviewerModes = ["on-ask", "all-tools"] as const;
@@ -59,6 +61,8 @@ export type ChatConfiguration = {
 
 export type PluginConfiguration = {
   mode: ReviewerMode;
+  auditLog: { enabled: boolean; includeCommand: boolean; path?: string };
+  conversation: { enabled: boolean; includeAssistant: boolean };
   reviewer: {
     backend: ReviewerBackend;
     agent: {
@@ -161,6 +165,19 @@ const decisionOptionsSchema = z.discriminatedUnion("provider", [
 ]);
 
 const pluginConfigurationSchema = z.object({
+  auditLog: z.optional(
+    z.object({
+      enabled: z.optional(z.boolean()),
+      includeCommand: z.optional(z.boolean()),
+      path: z.optional(z.string().check(z.refine(isAbsolute))),
+    }),
+  ),
+  conversation: z.optional(
+    z.object({
+      enabled: z.optional(z.boolean()),
+      includeAssistant: z.optional(z.boolean()),
+    }),
+  ),
   mode: z.optional(z.enum(reviewerModes)),
   reviewer: z.optional(
     z.object({
@@ -203,6 +220,8 @@ export function parsePluginConfiguration(input: {
   const decision = backend === "decision" ? decisionConfiguration({ reviewer, env }) : undefined;
   return {
     mode: result.data.mode ?? "on-ask",
+    auditLog: auditConfiguration(result.data.auditLog),
+    conversation: conversationConfiguration(result.data.conversation),
     reviewer: {
       backend,
       agent: agentConfiguration(reviewer),
@@ -215,6 +234,31 @@ export function parsePluginConfiguration(input: {
         : {}),
     },
   };
+}
+
+function conversationConfiguration(
+  input: z.infer<typeof pluginConfigurationSchema>["conversation"],
+): PluginConfiguration["conversation"] {
+  return {
+    enabled: input?.enabled ?? false,
+    includeAssistant: input?.includeAssistant ?? false,
+  };
+}
+
+function auditConfiguration(
+  input: z.infer<typeof pluginConfigurationSchema>["auditLog"],
+): PluginConfiguration["auditLog"] {
+  const configuration = {
+    enabled: input?.enabled ?? false,
+    includeCommand: input?.includeCommand ?? false,
+    path: input?.path,
+  };
+  if (configuration.enabled && !configuration.path) {
+    throw new Error(
+      "Invalid auto-approval plugin options: auditLog.path must be an absolute path when enabled.",
+    );
+  }
+  return configuration;
 }
 
 /** Maps a backend name, deprecated ones included, to the backend it means. */

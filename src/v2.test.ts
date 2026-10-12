@@ -86,6 +86,58 @@ function askEvent(overrides: Record<string, unknown> = {}) {
 }
 
 describe("V2 plugin (opencode 2.x)", () => {
+  it.each(["on-ask", "all-tools"])(
+    "cancels stale %s approval even if the new prompt text repeats",
+    async (mode) => {
+      const { context, hooks, session } = createContext({
+        options: { mode, conversation: { enabled: false } },
+      });
+      const { plugin, review } = createPlugin({ verdict: "allow" });
+      await plugin.setup(context as never);
+      await hooks["session.prompt"]?.({ sessionID: "session-1", prompt: { text: "continue" } });
+      review.mockImplementationOnce(async () => {
+        await hooks["session.prompt"]?.({ sessionID: "session-1", prompt: { text: "continue" } });
+        return { verdict: "allow", reason: "stale" };
+      });
+      if (mode === "on-ask") {
+        const event = askEvent();
+        await hooks["permission.evaluate"]?.(event);
+        expect(event.effect).toBe("ask");
+      } else {
+        await expect(
+          hooks["tool.execute.before"]?.({ sessionID: "session-1", tool: "bash", input: {} }),
+        ).rejects.toThrow("User intent changed");
+      }
+      expect(session.context).not.toHaveBeenCalled();
+    },
+  );
+
+  it("includes assistant text only with explicit opt-in and does not use synthetic prompts", async () => {
+    const { context, hooks } = createContext({
+      options: { conversation: { enabled: true, includeAssistant: true } },
+    });
+    const { plugin, review } = createPlugin({ verdict: "allow" });
+    await plugin.setup(context as never);
+    await hooks["session.prompt"]?.({
+      sessionID: "session-1",
+      prompt: { text: "injected" },
+      metadata: { synthetic: true },
+    });
+    await hooks["permission.evaluate"]?.(askEvent());
+    expect(review).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userIntent: "hello",
+        conversation: {
+          turns: [
+            { role: "user", text: "hello" },
+            { role: "assistant", text: '{"verdict":"allow","reason":"safe"}' },
+          ],
+          incomplete: false,
+        },
+      }),
+    );
+  });
+
   it("registers a hidden read-only reviewer subagent", async () => {
     const { context, agents } = createContext();
     const { plugin } = createPlugin({ verdict: "allow" });

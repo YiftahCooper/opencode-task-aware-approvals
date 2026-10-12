@@ -89,6 +89,7 @@ describe("DecisionReviewer", () => {
     await expect(reviewer.review(request)).resolves.toEqual({
       verdict: "allow",
       reason: "jev-latest chose allow (allow 0.97, deny 0.00, escalate 0.00).",
+      confidence: 0.97,
     });
 
     const [url, init] = fetch.mock.calls[0] ?? [];
@@ -127,6 +128,7 @@ describe("DecisionReviewer", () => {
       verdict: "escalate",
       reason:
         "jev-latest leaned allow at 0.45, below the 0.60 threshold (allow 0.45, deny 0.15, escalate 0.40).",
+      confidence: 0.45,
     });
   });
 
@@ -169,6 +171,7 @@ describe("DecisionReviewer", () => {
     await expect(reviewer.review(request)).resolves.toEqual({
       verdict: "escalate",
       reason: "jev-latest leaned allow at 0.50, below the 0.60 threshold (confidence 0.50).",
+      confidence: 0.5,
     });
   });
 
@@ -306,6 +309,7 @@ describe("DecisionReviewer with Cloudflare Workers AI", () => {
     await expect(reviewer.review(request)).resolves.toEqual({
       verdict: "deny",
       reason: "clef-flash chose deny (allow 0.02, deny 0.94, escalate 0.05).",
+      confidence: 0.9377,
     });
 
     const [url, init] = fetch.mock.calls[0] ?? [];

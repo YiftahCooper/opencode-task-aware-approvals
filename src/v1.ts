@@ -8,6 +8,11 @@ import {
 } from "./agent-reviewer.js";
 import type { ModelReference } from "./config.js";
 import { usesAgentReviewer, parsePluginConfiguration } from "./config.js";
+import {
+  conversationFromMessages,
+  HISTORY_MESSAGE_LIMIT,
+  readConversation,
+} from "./conversation.js";
 import type { ReviewSessionClient } from "./reviewer.js";
 import type { PluginDependencies } from "./shared.js";
 import { isRecord, reviewForApproval, reviewToolCallOrThrow, textFromParts } from "./shared.js";
@@ -36,6 +41,10 @@ const reviewerTools = Object.fromEntries(reviewerAllowedTools.map((tool) => [too
 
 type SdkClient = {
   session: {
+    messages?(input: {
+      path: { id: string };
+      query: { directory: string; limit: number };
+    }): Promise<unknown>;
     create(input: { query: { directory: string } }): Promise<unknown>;
     prompt(input: {
       path: { id: string };
@@ -121,6 +130,25 @@ export function createV1Plugin(dependencies: PluginDependencies): Plugin {
     });
     const models = new Map<string, ModelReference>();
     const intents = new Map<string, string>();
+    const revisions = new Map<string, number>();
+    const conversation = (sessionID: string) =>
+      readConversation({
+        configuration: configuration.conversation,
+        latest: () => intents.get(sessionID),
+        load: async () => {
+          const client = context.client as unknown as SdkClient;
+          if (!client.session?.messages) throw new Error("Session history is unavailable.");
+          return conversationFromMessages({
+            messages: await client.session.messages({
+              path: { id: sessionID },
+              query: { directory: context.directory, limit: HISTORY_MESSAGE_LIMIT },
+            }),
+            generation: "v1",
+            sessionID,
+            includeAssistant: configuration.conversation.includeAssistant,
+          });
+        },
+      });
 
     return {
       config: async (config) => {
@@ -134,7 +162,11 @@ export function createV1Plugin(dependencies: PluginDependencies): Plugin {
         // The reviewer's own prompts carry no user intent worth keeping.
         if (reviewer.isReviewerSession({ sessionID: event.sessionID })) return Promise.resolve();
         if (event.model) models.set(event.sessionID, event.model);
-        intents.set(event.sessionID, textFromParts(output.parts));
+        intents.set(
+          event.sessionID,
+          textFromParts({ parts: output.parts, skipSyntheticOrIgnored: true }),
+        );
+        revisions.set(event.sessionID, (revisions.get(event.sessionID) ?? 0) + 1);
         return Promise.resolve();
       },
       "chat.params": (event) => {
@@ -154,6 +186,7 @@ export function createV1Plugin(dependencies: PluginDependencies): Plugin {
         const action = request.permission !== undefined ? request.permission : request.type;
         if (typeof action !== "string" || action.trim().length === 0) return;
 
+        const revision = revisions.get(request.sessionID);
         const decision = await reviewForApproval({
           reviewer,
           request: {
@@ -161,11 +194,11 @@ export function createV1Plugin(dependencies: PluginDependencies): Plugin {
             sessionID: request.sessionID,
             action,
             resource: { pattern: request.patterns ?? request.pattern, metadata: request.metadata },
-            userIntent: intents.get(request.sessionID),
+            ...(await conversation(request.sessionID)),
             model: models.get(request.sessionID),
           },
         });
-        if (decision === undefined) return;
+        if (decision === undefined || revisions.get(request.sessionID) !== revision) return;
 
         try {
           await context.client.postSessionIdPermissionsPermissionId({
@@ -184,6 +217,7 @@ export function createV1Plugin(dependencies: PluginDependencies): Plugin {
         )
           return;
 
+        const revision = revisions.get(event.sessionID);
         await reviewToolCallOrThrow({
           reviewer,
           request: {
@@ -191,10 +225,13 @@ export function createV1Plugin(dependencies: PluginDependencies): Plugin {
             sessionID: event.sessionID,
             action: event.tool,
             resource: output.args,
-            userIntent: intents.get(event.sessionID),
+            ...(await conversation(event.sessionID)),
             model: models.get(event.sessionID),
           },
         });
+        if (revisions.get(event.sessionID) !== revision) {
+          throw new Error("User intent changed during review; human review is required.");
+        }
       },
     };
   };
@@ -213,5 +250,5 @@ function responseText(input: unknown): string {
   if (!isRecord(response) || !Array.isArray(response.parts)) {
     throw new Error("OpenCode SDK did not return reviewer message parts.");
   }
-  return textFromParts(response.parts);
+  return textFromParts({ parts: response.parts });
 }

@@ -8,6 +8,7 @@ import {
 } from "./agent-reviewer.js";
 import type { ModelReference } from "./config.js";
 import { usesAgentReviewer, parsePluginConfiguration } from "./config.js";
+import { conversationFromMessages, readConversation } from "./conversation.js";
 import type { ReviewSessionClient } from "./reviewer.js";
 import type { PluginDependencies } from "./shared.js";
 import { reviewForApproval, reviewToolCallOrThrow } from "./shared.js";
@@ -86,6 +87,19 @@ export function createV2Plugin(dependencies: PluginDependencies): Plugin.Plugin 
         directory: context.location.directory,
       });
       const intents = new Map<string, string>();
+      const revisions = new Map<string, number>();
+      const conversation = (sessionID: string) =>
+        readConversation({
+          configuration: configuration.conversation,
+          latest: () => intents.get(sessionID),
+          load: async () =>
+            conversationFromMessages({
+              messages: await context.session.context({ sessionID }),
+              generation: "v2",
+              sessionID,
+              includeAssistant: configuration.conversation.includeAssistant,
+            }),
+        });
 
       // `update` on an unknown ID registers a new agent; the branded ID/Name
       // types are plain strings at runtime. Only the agent reviewer needs one,
@@ -114,7 +128,9 @@ export function createV2Plugin(dependencies: PluginDependencies): Plugin.Plugin 
 
       await context.session.hook("prompt", (event) => {
         if (reviewer.isReviewerSession({ sessionID: event.sessionID })) return;
+        if (event.metadata?.synthetic || event.metadata?.ignored) return;
         intents.set(event.sessionID, event.prompt.text);
+        revisions.set(event.sessionID, (revisions.get(event.sessionID) ?? 0) + 1);
       });
 
       const sessionModel = async (sessionID: string): Promise<ModelReference | undefined> => {
@@ -132,6 +148,7 @@ export function createV2Plugin(dependencies: PluginDependencies): Plugin.Plugin 
         await context.permission.hook("evaluate", async (event) => {
           if (event.effect !== "ask" || isReviewer(event)) return;
 
+          const revision = revisions.get(event.sessionID);
           const decision = await reviewForApproval({
             reviewer,
             request: {
@@ -139,11 +156,11 @@ export function createV2Plugin(dependencies: PluginDependencies): Plugin.Plugin 
               sessionID: event.sessionID,
               action: event.action,
               resource: { resources: event.resources, metadata: event.metadata },
-              userIntent: intents.get(event.sessionID),
+              ...(await conversation(event.sessionID)),
               model: await sessionModel(event.sessionID),
             },
           });
-          if (decision === undefined) return;
+          if (decision === undefined || revisions.get(event.sessionID) !== revision) return;
           event.effect = "allow";
           event.message = decision.reason;
         });
@@ -153,6 +170,7 @@ export function createV2Plugin(dependencies: PluginDependencies): Plugin.Plugin 
       await context.tool.hook("execute.before", async (event) => {
         if (isReviewer(event)) return;
 
+        const revision = revisions.get(event.sessionID);
         await reviewToolCallOrThrow({
           reviewer,
           request: {
@@ -160,10 +178,13 @@ export function createV2Plugin(dependencies: PluginDependencies): Plugin.Plugin 
             sessionID: event.sessionID,
             action: event.tool,
             resource: event.input,
-            userIntent: intents.get(event.sessionID),
+            ...(await conversation(event.sessionID)),
             model: await sessionModel(event.sessionID),
           },
         });
+        if (revisions.get(event.sessionID) !== revision) {
+          throw new Error("User intent changed during review; human review is required.");
+        }
       });
     },
   };

@@ -42,11 +42,41 @@ async function fixture() {
   await writeFile(config, JSON.stringify(original));
   const run = (...args) =>
     spawnSync(process.execPath, [script, ...args], {
-      env: { ...process.env, HOME: home },
+      env: { ...process.env, HOME: home, XDG_CONFIG_HOME: join(home, ".config") },
       encoding: "utf8",
     });
   return { home, config, release, original, run };
 }
+test("installer fixtures ignore inherited XDG config and preserve outside settings", async () => {
+  const f = await fixture();
+  const outside = await mkdtemp(resolve("../.backup-scratch/installer-tests/outside-"));
+  const inherited = process.env.XDG_CONFIG_HOME;
+  try {
+    await mkdir(join(outside, "opencode"));
+    const outsideConfig = join(outside, "opencode/opencode.jsonc");
+    const sentinel = '{"plugin":["outside-plugin"],"permission":{"*":"ask"}}\n';
+    await writeFile(outsideConfig, sentinel);
+    const before = await inventory(outside);
+    process.env.XDG_CONFIG_HOME = outside;
+    const installed = f.run("install", f.release, "a".repeat(64));
+    assert.equal(installed.status, 0, installed.stderr);
+    assert.deepEqual(await inventory(outside), before);
+    assert.equal(await readFile(outsideConfig, "utf8"), sentinel);
+    assert.deepEqual(JSON.parse(await readFile(f.config, "utf8")).plugin, [
+      "keep-me",
+      [f.release, {}],
+    ]);
+    const rolled = f.run("rollback");
+    assert.equal(rolled.status, 0, rolled.stderr);
+    assert.deepEqual(await inventory(outside), before);
+    assert.deepEqual(JSON.parse(await readFile(f.config, "utf8")), f.original);
+  } finally {
+    if (inherited === undefined) delete process.env.XDG_CONFIG_HOME;
+    else process.env.XDG_CONFIG_HOME = inherited;
+    await rm(f.home, { recursive: true });
+    await rm(outside, { recursive: true });
+  }
+});
 test("install and rollback preserve permissions, other plugins, MCP and concurrent edits", async () => {
   const f = await fixture();
   try {

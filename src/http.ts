@@ -18,6 +18,8 @@ export async function postJSON(input: {
   url: string;
   apiKey: string;
   body: unknown;
+  /** Extra request headers, such as a provider feature flag. */
+  headers?: Record<string, string>;
   timeoutMs: number;
   /** Names the service in error messages, e.g. "Decision model". */
   label: string;
@@ -44,6 +46,7 @@ async function send(input: {
   url: string;
   apiKey: string;
   body: unknown;
+  headers?: Record<string, string>;
   label: string;
   signal: AbortSignal;
 }): Promise<PostResult> {
@@ -52,6 +55,7 @@ async function send(input: {
     response = await input.fetch(input.url, {
       method: "POST",
       headers: {
+        ...input.headers,
         authorization: `Bearer ${input.apiKey}`,
         "content-type": "application/json",
       },

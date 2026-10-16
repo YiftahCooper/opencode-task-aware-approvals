@@ -69,6 +69,13 @@ const usageSchema = z.object({
   ),
 });
 
+/**
+ * TypeSafe's opt-in for Jev's 262k-token context. Sent only on requests
+ * larger than the regular budget: TypeSafe documents long-context answers as
+ * slower and less accurate.
+ */
+const LONG_CONTEXT_HEADER = "TypeSafe-Danger-Zone-Long-Context";
+
 /** Workers AI wraps every answer in its API envelope. */
 const cloudflareEnvelopeSchema = z.object({ result: z.unknown() });
 
@@ -152,15 +159,17 @@ export class DecisionReviewer implements Reviewer {
     tokens: { input: number | null; output: number | null };
   }): Promise<ReviewVerdict> {
     const state = reviewState(input.request);
-    const { model, maxStateTokens } = this.#configuration;
+    const { model, maxStateTokens, longContext } = this.#configuration;
     const serialized = JSON.stringify(state);
     const estimate = estimateTokens(serialized);
-    if (estimate > maxStateTokens) {
+    const long = estimate > maxStateTokens && longContext !== undefined;
+    const budget = long ? longContext.maxStateTokens : maxStateTokens;
+    if (estimate > budget) {
       // Nothing was sent, so nothing was billed.
       input.tokens.input = 0;
       input.tokens.output = 0;
       throw new OversizeError(
-        `Operation too large for ${model} (about ${estimate.toLocaleString("en-US")} tokens, budget ${maxStateTokens.toLocaleString("en-US")}).`,
+        `Operation too large for ${model} (about ${estimate.toLocaleString("en-US")} tokens, budget ${budget.toLocaleString("en-US")}${long ? " with long context" : ""}).`,
       );
     }
 
@@ -173,6 +182,7 @@ export class DecisionReviewer implements Reviewer {
         state,
         questions: { verdict: verdictQuestion({ instructions: this.#instructions }) },
       },
+      ...(long ? { headers: { [LONG_CONTEXT_HEADER]: "true" } } : {}),
       timeoutMs: this.#timeoutMs,
       label: "Decision model",
     });
@@ -194,7 +204,11 @@ export class DecisionReviewer implements Reviewer {
       input.tokens.output = usage.data.usage?.output_tokens ?? null;
     }
     assertReadWhole({ model, prompt: serialized, reportedTokens: input.tokens.input });
-    return this.#verdict({ answer: body });
+    return this.#verdict({
+      answer: body,
+      threshold: long ? longContext.minAllowProbability : this.#configuration.minAllowProbability,
+      label: long ? `${model} with long context` : model,
+    });
   }
 
   /** Workers AI wraps the System One answer in its API envelope. */
@@ -204,7 +218,13 @@ export class DecisionReviewer implements Reviewer {
     return envelope.success ? envelope.data.result : undefined;
   }
 
-  #verdict(input: { answer: unknown }): ReviewVerdict {
+  #verdict(input: {
+    answer: unknown;
+    /** An `allow` below this probability is escalated. */
+    threshold: number;
+    /** Names the model in the reason. */
+    label: string;
+  }): ReviewVerdict {
     const result = z.safeParse(answerSchema, input.answer);
     if (!result.success) {
       throw new Error("Decision model response did not match the verdict schema.");
@@ -228,21 +248,20 @@ export class DecisionReviewer implements Reviewer {
       : `confidence ${probability.toFixed(2)}`;
 
     // The model always picks an option; a hesitant allow is not an approval.
-    const threshold = this.#configuration.minAllowProbability;
-    const model = this.#configuration.model;
+    const { threshold, label } = input;
     if (answer.choice === "allow" && probability < threshold) {
       return {
         verdict: "escalate",
         ...metadata,
         reason: sanitizeReason(
-          `${model} leaned allow at ${probability.toFixed(2)}, below the ${threshold.toFixed(2)} threshold (${summary}).`,
+          `${label} leaned allow at ${probability.toFixed(2)}, below the ${threshold.toFixed(2)} threshold (${summary}).`,
         ),
       };
     }
     return {
       verdict: answer.choice,
       ...metadata,
-      reason: sanitizeReason(`${model} chose ${answer.choice} (${summary}).`),
+      reason: sanitizeReason(`${label} chose ${answer.choice} (${summary}).`),
     };
   }
 }

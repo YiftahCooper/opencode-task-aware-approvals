@@ -611,6 +611,60 @@ describe("parsePluginConfiguration", () => {
     });
   });
 
+  describe("decision longContext", () => {
+    it("is off by default", () => {
+      expect(
+        parsePluginConfiguration(typeSafeOptionsWithEnv({})).reviewer.decision,
+      ).not.toHaveProperty("longContext");
+      expect(
+        parsePluginConfiguration(typeSafeOptionsWithEnv({ longContext: false })).reviewer.decision,
+      ).not.toHaveProperty("longContext");
+    });
+
+    it("takes true with the defaults, inheriting the allow threshold", () => {
+      expect(
+        parsePluginConfiguration(
+          typeSafeOptionsWithEnv({ longContext: true, minAllowProbability: 0.7 }),
+        ).reviewer.decision?.longContext,
+      ).toEqual({ maxStateTokens: 240_000, minAllowProbability: 0.7 });
+    });
+
+    it("reads its own budget and threshold", () => {
+      expect(
+        parsePluginConfiguration(
+          typeSafeOptionsWithEnv({
+            longContext: { maxStateTokens: 100_000, minAllowProbability: 0.85 },
+          }),
+        ).reviewer.decision?.longContext,
+      ).toEqual({ maxStateTokens: 100_000, minAllowProbability: 0.85 });
+    });
+
+    it("rejects a budget out of range or not above the regular one", () => {
+      expect(() =>
+        parsePluginConfiguration(
+          typeSafeOptionsWithEnv({ longContext: { maxStateTokens: 300_000 } }),
+        ),
+      ).toThrow("reviewer.decision");
+      expect(() =>
+        parsePluginConfiguration(
+          typeSafeOptionsWithEnv({
+            maxStateTokens: 30_000,
+            longContext: { maxStateTokens: 30_000 },
+          }),
+        ),
+      ).toThrow("reviewer.decision.longContext.maxStateTokens must be larger than");
+    });
+
+    it("is refused for the cloudflare provider", () => {
+      expect(() =>
+        parsePluginConfiguration({
+          options: cloudflareOptions({ apiKey: "t", accountId, longContext: true }),
+          env: {},
+        }),
+      ).toThrow("longContext is only available with the typesafe provider");
+    });
+  });
+
   describe("deprecated names", () => {
     it("reads backend opencode with reviewer.model as the agent backend", () => {
       expect(

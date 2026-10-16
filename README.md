@@ -132,7 +132,7 @@ same System One API:
 
 | Provider     | Models                                                                                                  | Credentials (option / environment)                                       | Default model |
 | ------------ | ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ | ------------- |
-| `typesafe`   | [TypeSafe AI](https://typesafe.ai/)'s Jev (`jev-latest`, `jev-1.13.0`, …)                               | `apiKey` / `TYPESAFE_API_KEY`, optional `baseURL` / `TYPESAFE_BASE_URL`  | `jev-latest`  |
+| `typesafe`   | [TypeSafe AI](https://typesafe.ai/)'s Jev (`jev-latest`, `jev-1.14.0`, …)                               | `apiKey` / `TYPESAFE_API_KEY`, optional `baseURL` / `TYPESAFE_BASE_URL`  | `jev-latest`  |
 | `cloudflare` | [Cloudflare](https://developers.cloudflare.com/workers-ai/)'s Clef on Workers AI (`clef`, `clef-flash`) | `apiKey` / `CLOUDFLARE_API_TOKEN`, `accountId` / `CLOUDFLARE_ACCOUNT_ID` | `clef`        |
 
 ```jsonc
@@ -157,18 +157,19 @@ same System One API:
 }
 ```
 
-| Option                                  | Default                   | Description                                                                                                        |
-| --------------------------------------- | ------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| `reviewer.backend`                      | `"agent"`                 | `"agent"`, `"chat"` or `"decision"`                                                                                |
-| `reviewer.decision.provider`            | — (required)              | `"typesafe"` or `"cloudflare"`                                                                                     |
-| `reviewer.decision.apiKey`              | from the environment      | TypeSafe AI API key, or a Cloudflare API token with Workers AI access                                              |
-| `reviewer.decision.baseURL`             | `https://api.typesafe.ai` | `typesafe` only: API origin; a bare HTTPS origin (HTTP only for loopback)                                          |
-| `reviewer.decision.accountId`           | from the environment      | `cloudflare` only: the 32-character account ID                                                                     |
-| `reviewer.decision.model`               | per provider (above)      | Model or alias; pin a version such as `jev-1.13.0` for stable behavior                                             |
-| `reviewer.decision.minAllowProbability` | `0.6`                     | An `allow` answered with a lower probability becomes `escalate`                                                    |
-| `reviewer.decision.maxStateTokens`      | `28000`                   | Estimated size above which an operation is too large to send (1,000–60,000)                                        |
-| `reviewer.decision.onOversize`          | `"escalate"`              | Too large: `"escalate"` to a human, or hand it to the `"agent"` or `"chat"` reviewer                               |
-| `reviewer.agent.maxInputBytes`          | `200000`                  | The agent reviewer escalates a prompt longer than this (UTF-8 bytes) unsent rather than let the session compact it |
+| Option                                  | Default                   | Description                                                                                                                                |
+| --------------------------------------- | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `reviewer.backend`                      | `"agent"`                 | `"agent"`, `"chat"` or `"decision"`                                                                                                        |
+| `reviewer.decision.provider`            | — (required)              | `"typesafe"` or `"cloudflare"`                                                                                                             |
+| `reviewer.decision.apiKey`              | from the environment      | TypeSafe AI API key, or a Cloudflare API token with Workers AI access                                                                      |
+| `reviewer.decision.baseURL`             | `https://api.typesafe.ai` | `typesafe` only: API origin; a bare HTTPS origin (HTTP only for loopback)                                                                  |
+| `reviewer.decision.accountId`           | from the environment      | `cloudflare` only: the 32-character account ID                                                                                             |
+| `reviewer.decision.model`               | per provider (above)      | Model or alias; pin a version such as `jev-1.13.0` for stable behavior                                                                     |
+| `reviewer.decision.minAllowProbability` | `0.6`                     | An `allow` answered with a lower probability becomes `escalate`                                                                            |
+| `reviewer.decision.maxStateTokens`      | `28000`                   | Estimated size above which an operation is too large to send (1,000–60,000)                                                                |
+| `reviewer.decision.longContext`         | off                       | `typesafe` only: `true` or `{ maxStateTokens, minAllowProbability }` to send larger operations with [long context](#long-context-typesafe) |
+| `reviewer.decision.onOversize`          | `"escalate"`              | Too large: `"escalate"` to a human, or hand it to the `"agent"` or `"chat"` reviewer                                                       |
+| `reviewer.agent.maxInputBytes`          | `200000`                  | The agent reviewer escalates a prompt longer than this (UTF-8 bytes) unsent rather than let the session compact it                         |
 
 - Prefer the environment variables: `opencode.json` is often committed, and a key written there is
   shared with it. Surrounding whitespace in keys is trimmed. The plugin fails at startup when the
@@ -214,7 +215,9 @@ same System One API:
 
 ### Operations too large for the decision model
 
-Jev refuses a `state` over 32Ki tokens, and Clef, which accepts 64Ki, slows to tens of seconds
+Jev refuses a question over 32Ki tokens (the `state` plus the question; Jev 1.14's 64Ki is per
+request, shared by its questions, and the plugin asks one) unless
+[long context](#long-context-typesafe) is on, and Clef, which accepts 64Ki, slows to tens of seconds
 past 20,000. Before sending, the plugin estimates the size conservatively (ASCII at 2.5 characters
 a token, any other character at 1.1 tokens: Japanese measured about one token per character on
 both models, so a Japanese file reaches Jev's default 28,000-token budget at about 25,000
@@ -244,6 +247,43 @@ up to twice as long.
   "chat": { "baseURL": "https://openrouter.ai/api/v1", "apiKey": "{env:OPENROUTER_API_KEY}", "model": "openai/gpt-5.6-luna" },
 }
 ```
+
+### Long context (TypeSafe)
+
+TypeSafe's `TypeSafe-Danger-Zone-Long-Context: true` header raises Jev's limit to 262,144 tokens
+per question and per request (Jev 1.13 and 1.14), at the same price per token. With
+`reviewer.decision.longContext` set, an operation whose estimate exceeds `maxStateTokens` is sent
+whole with that header instead of being too large, up to `longContext.maxStateTokens`; smaller
+operations are still sent without it.
+
+```jsonc
+"decision": {
+  "provider": "typesafe",
+  "longContext": { "maxStateTokens": 240000, "minAllowProbability": 0.8 },
+}
+```
+
+| Option                                              | Default                                 | Description                                                                    |
+| --------------------------------------------------- | --------------------------------------- | ------------------------------------------------------------------------------ |
+| `reviewer.decision.longContext`                     | off                                     | `true` turns it on with the defaults below; an object sets them                |
+| `reviewer.decision.longContext.maxStateTokens`      | `240000`                                | Estimated size above which even a long-context request is too large (≤256,000) |
+| `reviewer.decision.longContext.minAllowProbability` | `reviewer.decision.minAllowProbability` | Allow threshold for long-context answers only                                  |
+
+- It is off by default: TypeSafe documents long-context answers as slower and less accurate than
+  those within the regular limit, so only the operations that need it use it. An operation past
+  `longContext.maxStateTokens` (or that the API still refuses) is too large and follows
+  `onOversize`.
+- A verdict reached this way says so, e.g.
+  `jev-1.14.0 with long context chose escalate (allow 0.32, deny 0.07, escalate 0.61).` Raise
+  `longContext.minAllowProbability` to approve fewer of them automatically; a single dangerous line
+  is easier to miss in a large file.
+- Measured on 2026-10-16: 54k tokens answered in 0.8 s, 134k in about 2 s and 241k in 4.4 s, all
+  within the default `timeoutMs`; 272k was refused. A long, harmless write of this plugin's own
+  sources (69k tokens) leaned `escalate` (0.57–0.61) where a single file of it leaned `allow`.
+- Long context costs what its tokens cost: a 240,000-token review is about $0.01 at Jev's
+  $0.042 per million input tokens, recorded in the usage log like any other review.
+- Clef on Workers AI has no such switch; `longContext` with `provider: "cloudflare"` fails at
+  startup.
 
 ### Chat backend
 

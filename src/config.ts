@@ -47,7 +47,19 @@ export type DecisionConfiguration = {
   minAllowProbability: number;
   /** The estimated `state` size above which an operation is not sent. */
   maxStateTokens: number;
+  /**
+   * `typesafe` only: operations above `maxStateTokens` and up to this budget
+   * are sent with TypeSafe's long-context header instead of being too large.
+   */
+  longContext?: LongContextConfiguration;
   onOversize: OversizeAction;
+};
+
+export type LongContextConfiguration = {
+  /** The estimated `state` size above which even a long-context request is not sent. */
+  maxStateTokens: number;
+  /** An `allow` from a long-context request below this probability is downgraded to `escalate`. */
+  minAllowProbability: number;
 };
 
 export type ChatConfiguration = {
@@ -99,14 +111,24 @@ const cloudflareModelPattern = /^[a-z\d][a-z\d.-]*$/;
 const defaultMinAllowProbability = 0.6;
 
 /**
- * Jev refuses a `state` above 32Ki tokens, so 28,000 leaves room for the
- * questions and the estimate. Clef accepts 64Ki but took 46 s for 38k tokens,
+ * Jev refuses a question over 32Ki tokens (the `state` plus that question; Jev
+ * 1.14's 64Ki is per request, shared by all questions), so 28,000 leaves room
+ * for the question and the estimate. Clef accepts 64Ki but took 46 s for 38k tokens,
  * past the default timeout, so its budget stays where it answered in seconds.
  */
 const defaultMaxStateTokens: Record<DecisionProvider, number> = {
   typesafe: 28_000,
   cloudflare: 20_000,
 };
+
+/**
+ * TypeSafe's long-context header raises Jev's limit to 262,144 tokens per
+ * question and per request (Jev 1.13 and 1.14). 240,000 leaves the same kind of
+ * room as the default budget; 241k measured tokens answered in 4.4 s.
+ */
+const defaultLongContextMaxStateTokens = 240_000;
+
+const MAX_LONG_CONTEXT_STATE_TOKENS = 256_000;
 
 /**
  * LLM reviewers have long contexts; this keeps one review to a bounded cost,
@@ -150,9 +172,18 @@ const chatOptionsSchema = z.object({
   maxInputBytes: z.optional(z.int().check(z.gte(1_000), z.lte(4_000_000))),
 });
 
+const longContextOptionsSchema = z.union([
+  z.boolean(),
+  z.object({
+    maxStateTokens: z.optional(z.int().check(z.gte(1_000), z.lte(MAX_LONG_CONTEXT_STATE_TOKENS))),
+    minAllowProbability: z.optional(z.number().check(z.gte(0), z.lte(1))),
+  }),
+]);
+
 const typeSafeOptionsSchema = z.object({
   ...decisionOptionsShape,
   baseURL: z.optional(z.string()),
+  longContext: z.optional(longContextOptionsSchema),
 });
 
 const decisionOptionsSchema = z.discriminatedUnion("provider", [
@@ -161,6 +192,8 @@ const decisionOptionsSchema = z.discriminatedUnion("provider", [
     provider: z.literal("cloudflare"),
     ...decisionOptionsShape,
     accountId: z.optional(z.string()),
+    // Rejected with a clear message rather than silently ignored.
+    longContext: z.optional(z.unknown()),
   }),
 ]);
 
@@ -414,14 +447,48 @@ function typeSafeConfiguration(input: {
       `Invalid auto-approval plugin options: the typesafe provider needs ${input.prefix}.apiKey or TYPESAFE_API_KEY.`,
     );
   }
+  const minAllowProbability = input.options.minAllowProbability ?? defaultMinAllowProbability;
+  const maxStateTokens = input.options.maxStateTokens ?? defaultMaxStateTokens.typesafe;
+  const longContext = longContextConfiguration({
+    options: input.options.longContext,
+    minAllowProbability,
+    maxStateTokens,
+    prefix: input.prefix,
+  });
   return {
     provider: "typesafe",
     apiKey,
     endpoint: typeSafeEndpoint(source.baseURL ?? defaultTypeSafeBaseURL),
     model: input.options.model ?? defaultModels.typesafe,
-    minAllowProbability: input.options.minAllowProbability ?? defaultMinAllowProbability,
-    maxStateTokens: input.options.maxStateTokens ?? defaultMaxStateTokens.typesafe,
+    minAllowProbability,
+    maxStateTokens,
+    ...(longContext === undefined ? {} : { longContext }),
     onOversize: input.options.onOversize ?? "escalate",
+  };
+}
+
+/**
+ * `true` or an object turns long context on; it is off by default because
+ * TypeSafe documents long-context answers as slower and less accurate. Its
+ * threshold defaults to the regular one.
+ */
+function longContextConfiguration(input: {
+  options: z.infer<typeof longContextOptionsSchema> | undefined;
+  minAllowProbability: number;
+  maxStateTokens: number;
+  prefix: string;
+}): LongContextConfiguration | undefined {
+  if (input.options === undefined || input.options === false) return undefined;
+  const options = input.options === true ? {} : input.options;
+  const maxStateTokens = options.maxStateTokens ?? defaultLongContextMaxStateTokens;
+  if (maxStateTokens <= input.maxStateTokens) {
+    throw new Error(
+      `Invalid auto-approval plugin options: ${input.prefix}.longContext.maxStateTokens must be larger than ${input.prefix}.maxStateTokens.`,
+    );
+  }
+  return {
+    maxStateTokens,
+    minAllowProbability: options.minAllowProbability ?? input.minAllowProbability,
   };
 }
 
@@ -436,6 +503,11 @@ function cloudflareConfiguration(input: {
   /** Where the options were written, for error messages. */
   prefix: string;
 }): DecisionConfiguration {
+  if (input.options.longContext !== undefined) {
+    throw new Error(
+      `Invalid auto-approval plugin options: ${input.prefix}.longContext is only available with the typesafe provider.`,
+    );
+  }
   const apiKey =
     nonEmpty(input.options.apiKey?.trim()) ?? nonEmpty(input.env.CLOUDFLARE_API_TOKEN?.trim());
   if (apiKey === undefined) {

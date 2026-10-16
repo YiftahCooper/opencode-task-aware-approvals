@@ -621,12 +621,37 @@ describe("parsePluginConfiguration", () => {
       ).not.toHaveProperty("longContext");
     });
 
-    it("takes true with the defaults, inheriting the allow threshold", () => {
+    it("takes true or {} with the defaults and a stricter allow threshold", () => {
+      for (const longContext of [true, {}]) {
+        expect(
+          parsePluginConfiguration(typeSafeOptionsWithEnv({ longContext })).reviewer.decision
+            ?.longContext,
+        ).toEqual({ maxStateTokens: 240_000, minAllowProbability: 0.8 });
+      }
       expect(
         parsePluginConfiguration(
-          typeSafeOptionsWithEnv({ longContext: true, minAllowProbability: 0.7 }),
+          typeSafeOptionsWithEnv({ longContext: true, minAllowProbability: 0.9 }),
         ).reviewer.decision?.longContext,
-      ).toEqual({ maxStateTokens: 240_000, minAllowProbability: 0.7 });
+      ).toEqual({ maxStateTokens: 240_000, minAllowProbability: 0.9 });
+    });
+
+    it("rejects a long-context threshold below the regular one", () => {
+      expect(() =>
+        parsePluginConfiguration(
+          typeSafeOptionsWithEnv({
+            minAllowProbability: 0.7,
+            longContext: { minAllowProbability: 0.6 },
+          }),
+        ),
+      ).toThrow("longContext.minAllowProbability must not be below");
+      expect(
+        parsePluginConfiguration(
+          typeSafeOptionsWithEnv({
+            minAllowProbability: 0.7,
+            longContext: { minAllowProbability: 0.7 },
+          }),
+        ).reviewer.decision?.longContext?.minAllowProbability,
+      ).toBe(0.7);
     });
 
     it("reads its own budget and threshold", () => {
@@ -655,7 +680,21 @@ describe("parsePluginConfiguration", () => {
       ).toThrow("reviewer.decision.longContext.maxStateTokens must be larger than");
     });
 
-    it("is refused for the cloudflare provider", () => {
+    it("accepts the largest budget", () => {
+      expect(
+        parsePluginConfiguration(
+          typeSafeOptionsWithEnv({ longContext: { maxStateTokens: 256_000 } }),
+        ).reviewer.decision?.longContext?.maxStateTokens,
+      ).toBe(256_000);
+    });
+
+    it("is refused for the cloudflare provider unless false", () => {
+      expect(
+        parsePluginConfiguration({
+          options: cloudflareOptions({ apiKey: "t", accountId, longContext: false }),
+          env: {},
+        }).reviewer.decision,
+      ).not.toHaveProperty("longContext");
       expect(() =>
         parsePluginConfiguration({
           options: cloudflareOptions({ apiKey: "t", accountId, longContext: true }),

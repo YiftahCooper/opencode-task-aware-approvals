@@ -130,6 +130,9 @@ const defaultLongContextMaxStateTokens = 240_000;
 
 const MAX_LONG_CONTEXT_STATE_TOKENS = 256_000;
 
+/** A single dangerous line is easier to miss in a large operation. */
+const defaultLongContextMinAllowProbability = 0.8;
+
 /**
  * LLM reviewers have long contexts; this keeps one review to a bounded cost,
  * within what a hosted model reads whole, and leaves the agent reviewer room
@@ -469,8 +472,9 @@ function typeSafeConfiguration(input: {
 
 /**
  * `true` or an object turns long context on; it is off by default because
- * TypeSafe documents long-context answers as slower and less accurate. Its
- * threshold defaults to the regular one.
+ * TypeSafe documents long-context answers as slower and less accurate. For
+ * the same reason its threshold is never below the regular one, and defaults
+ * to at least `defaultLongContextMinAllowProbability`.
  */
 function longContextConfiguration(input: {
   options: z.infer<typeof longContextOptionsSchema> | undefined;
@@ -486,10 +490,15 @@ function longContextConfiguration(input: {
       `Invalid auto-approval plugin options: ${input.prefix}.longContext.maxStateTokens must be larger than ${input.prefix}.maxStateTokens.`,
     );
   }
-  return {
-    maxStateTokens,
-    minAllowProbability: options.minAllowProbability ?? input.minAllowProbability,
-  };
+  const minAllowProbability =
+    options.minAllowProbability ??
+    Math.max(input.minAllowProbability, defaultLongContextMinAllowProbability);
+  if (minAllowProbability < input.minAllowProbability) {
+    throw new Error(
+      `Invalid auto-approval plugin options: ${input.prefix}.longContext.minAllowProbability must not be below ${input.prefix}.minAllowProbability.`,
+    );
+  }
+  return { maxStateTokens, minAllowProbability };
 }
 
 /**
@@ -503,7 +512,7 @@ function cloudflareConfiguration(input: {
   /** Where the options were written, for error messages. */
   prefix: string;
 }): DecisionConfiguration {
-  if (input.options.longContext !== undefined) {
+  if (input.options.longContext !== undefined && input.options.longContext !== false) {
     throw new Error(
       `Invalid auto-approval plugin options: ${input.prefix}.longContext is only available with the typesafe provider.`,
     );

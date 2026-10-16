@@ -1,7 +1,7 @@
 import * as z from "zod/mini";
 
 import type { DecisionConfiguration, PluginConfiguration } from "./config.js";
-import { type Fetch, postJSON } from "./http.js";
+import { type Fetch, type PostResult, postJSON } from "./http.js";
 import { conversationInstructions, reviewState } from "./review-state.js";
 import type { Reviewer, ReviewRequest, ReviewVerdict } from "./reviewer.js";
 import {
@@ -78,6 +78,14 @@ const LONG_CONTEXT_HEADER = "TypeSafe-Danger-Zone-Long-Context";
 
 /** Workers AI wraps every answer in its API envelope. */
 const cloudflareEnvelopeSchema = z.object({ result: z.unknown() });
+
+/**
+ * Jev answers 400 {"detail":{"error_type":"max_tokens_exceeded"}} for a state
+ * over its limit: the estimate fell short.
+ */
+function isRefusedAsTooLong(result: PostResult): boolean {
+  return !result.ok && result.status === 400 && result.text.includes("max_tokens_exceeded");
+}
 
 export class DecisionReviewer implements Reviewer {
   readonly #configuration: DecisionConfiguration;
@@ -162,35 +170,21 @@ export class DecisionReviewer implements Reviewer {
     const { model, maxStateTokens, longContext } = this.#configuration;
     const serialized = JSON.stringify(state);
     const estimate = estimateTokens(serialized);
-    const long = estimate > maxStateTokens && longContext !== undefined;
-    const budget = long ? longContext.maxStateTokens : maxStateTokens;
+    const needsLongContext = estimate > maxStateTokens && longContext !== undefined;
+    const budget = needsLongContext ? longContext.maxStateTokens : maxStateTokens;
     if (estimate > budget) {
       // Nothing was sent, so nothing was billed.
       input.tokens.input = 0;
       input.tokens.output = 0;
       throw new OversizeError(
-        `Operation too large for ${model} (about ${estimate.toLocaleString("en-US")} tokens, budget ${budget.toLocaleString("en-US")}${long ? " with long context" : ""}).`,
+        `Operation too large for ${model} (about ${estimate.toLocaleString("en-US")} tokens, budget ${budget.toLocaleString("en-US")}${needsLongContext ? " with long context" : ""}).`,
       );
     }
 
-    const result = await postJSON({
-      fetch: this.#fetch,
-      url: this.#configuration.endpoint,
-      apiKey: this.#configuration.apiKey,
-      body: {
-        model,
-        state,
-        questions: { verdict: verdictQuestion({ instructions: this.#instructions }) },
-      },
-      ...(long ? { headers: { [LONG_CONTEXT_HEADER]: "true" } } : {}),
-      timeoutMs: this.#timeoutMs,
-      label: "Decision model",
-    });
+    const { result, long } = await this.#send({ state, long: needsLongContext });
     if (!result.ok) {
-      // Jev answers 400 {"detail":{"error_type":"max_tokens_exceeded"}} for a
-      // state over its limit: the estimate fell short, and a smaller request
-      // would only be a partial view.
-      if (result.status === 400 && result.text.includes("max_tokens_exceeded")) {
+      // A smaller request would only be a partial view.
+      if (isRefusedAsTooLong(result)) {
         throw new OversizeError(`Operation too large for ${model} (refused by the API).`);
       }
       // 402 means the account is out of credit, 429 rate limited, 5xx an outage.
@@ -204,10 +198,49 @@ export class DecisionReviewer implements Reviewer {
       input.tokens.output = usage.data.usage?.output_tokens ?? null;
     }
     assertReadWhole({ model, prompt: serialized, reportedTokens: input.tokens.input });
+    const longThreshold = long ? longContext?.minAllowProbability : undefined;
     return this.#verdict({
       answer: body,
-      threshold: long ? longContext.minAllowProbability : this.#configuration.minAllowProbability,
+      threshold: longThreshold ?? this.#configuration.minAllowProbability,
       label: long ? `${model} with long context` : model,
+    });
+  }
+
+  /**
+   * Sends the review, with long context when asked. A regular request that Jev
+   * refuses as too long (the estimate fell short of its limit) is asked once
+   * more with long context when that is on, within the same timeout.
+   */
+  async #send(input: {
+    state: unknown;
+    long: boolean;
+  }): Promise<{ result: PostResult; long: boolean }> {
+    const deadline = Date.now() + this.#timeoutMs;
+    const result = await this.#post({ ...input, timeoutMs: this.#timeoutMs });
+    if (
+      input.long ||
+      this.#configuration.longContext === undefined ||
+      !isRefusedAsTooLong(result)
+    ) {
+      return { result, long: input.long };
+    }
+    const timeoutMs = Math.max(1, deadline - Date.now());
+    return { result: await this.#post({ state: input.state, long: true, timeoutMs }), long: true };
+  }
+
+  #post(input: { state: unknown; long: boolean; timeoutMs: number }): Promise<PostResult> {
+    return postJSON({
+      fetch: this.#fetch,
+      url: this.#configuration.endpoint,
+      apiKey: this.#configuration.apiKey,
+      body: {
+        model: this.#configuration.model,
+        state: input.state,
+        questions: { verdict: verdictQuestion({ instructions: this.#instructions }) },
+      },
+      ...(input.long ? { headers: { [LONG_CONTEXT_HEADER]: "true" } } : {}),
+      timeoutMs: input.timeoutMs,
+      label: "Decision model",
     });
   }
 

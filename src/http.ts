@@ -54,11 +54,7 @@ async function send(input: {
   try {
     response = await input.fetch(input.url, {
       method: "POST",
-      headers: {
-        ...input.headers,
-        authorization: `Bearer ${input.apiKey}`,
-        "content-type": "application/json",
-      },
+      headers: requestHeaders(input),
       body: JSON.stringify(input.body),
       redirect: "error",
       signal: input.signal,
@@ -95,4 +91,19 @@ async function readHead(response: Response): Promise<string> {
     await reader.cancel().catch(() => undefined);
   }
   return text.slice(0, MAX_ERROR_BODY_CHARS);
+}
+
+/** Extra headers, lowercased so that none of them can replace the key or the content type. */
+function requestHeaders(input: {
+  apiKey: string;
+  headers?: Record<string, string>;
+}): Record<string, string> {
+  const extra = Object.fromEntries(
+    Object.entries(input.headers ?? {}).map(([name, value]) => [name.toLowerCase(), value]),
+  );
+  return {
+    ...extra,
+    authorization: `Bearer ${input.apiKey}`,
+    "content-type": "application/json",
+  };
 }

@@ -44,6 +44,7 @@ export type ReviewSessionClient = {
   prompt(input: { sessionID: string; text: string }): Promise<string>;
   /** Best-effort cancellation after a timeout or failure. */
   abort(input: { sessionID: string }): Promise<unknown>;
+  remove?(input: { sessionID: string }): Promise<unknown>;
 };
 
 /** A review backend: the agent session or the decision model API. */

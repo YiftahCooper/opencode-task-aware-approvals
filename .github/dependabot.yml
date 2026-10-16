@@ -19,8 +19,6 @@ updates:
     labels:
       - "dependencies"
       - "automated"
-    assignees:
-      - "dyoshikawa"
     allow:
       - dependency-type: "all"
 
@@ -42,5 +40,3 @@ updates:
     labels:
       - "ci"
       - "automated"
-    assignees:
-      - "dyoshikawa"

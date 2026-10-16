@@ -1,3 +1,1 @@
-default_permissions = ":danger-full-access"
-approvals_reviewer = "auto_review"
-approval_policy = "on-request"
+# Inherit the user's normal approval and sandbox policy.

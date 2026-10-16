@@ -18,7 +18,9 @@
     ".pnpm-store/**",
     ".git/**",
     ".gitignore",
-    ".rulesync/**"
+    ".rulesync/**",
+    "tests/host/REFERENCE-LICENSE",
+    "cspell.json"
   ],
   "words": [
     "actionlint",
@@ -71,6 +73,51 @@
     "webfetch",
     "websearch",
     "worktrees",
-    "ZHIPU"
+    "ZHIPU",
+    "taskaware",
+    "Yiftah",
+    "bubblewrap",
+    "pytest",
+    "requalification",
+    "requalify",
+    "Lamport",
+    "multiset",
+    "lockfiles",
+    "tmpfs"
+  ],
+  "overrides": [
+    {
+      "filename": "tests/host/test_helpers.py",
+      "words": ["bwrap", "closerange"]
+    },
+    {
+      "filename": ["scripts/manage.mjs", "src/management-status.test.ts"],
+      "words": ["rolledback"]
+    },
+    {
+      "filename": "src/qualification.ts",
+      "words": ["testvm"]
+    },
+    {
+      "filename": "src/review-failure.ts",
+      "words": ["econn"]
+    },
+    {
+      "filename": ["README.md", "TASK-AWARE.md", "tests/host/run-isolated.sh"],
+      "words": [
+        "PYTHONDONTWRITEBYTECODE",
+        "clearenv",
+        "chdir",
+        "bwrap",
+        "resolv",
+        "cacheprovider",
+        "basetemp",
+        "warc"
+      ]
+    },
+    {
+      "filename": "tests/distribution.test.mjs",
+      "words": ["PYTHONDONTWRITEBYTECODE"]
+    }
   ]
 }

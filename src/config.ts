@@ -35,6 +35,7 @@ export type DecisionProvider = (typeof decisionProviders)[number];
 export type ModelReference = {
   providerID: string;
   modelID: string;
+  variant?: string;
 };
 
 export type DecisionConfiguration = {

@@ -86,6 +86,18 @@ function askEvent(overrides: Record<string, unknown> = {}) {
 }
 
 describe("V2 plugin (opencode 2.x)", () => {
+  it("does not approve an operation whose exact resources changed during review", async () => {
+    const { context, hooks } = createContext();
+    const { plugin, review } = createPlugin({ verdict: "allow" });
+    await plugin.setup(context as never);
+    const event = askEvent();
+    review.mockImplementationOnce(async () => {
+      event.resources.push("rm -rf valuable");
+      return { verdict: "allow", reason: "old action" };
+    });
+    await hooks["permission.evaluate"]?.(event);
+    expect(event.effect).toBe("ask");
+  });
   it.each(["on-ask", "all-tools"])(
     "cancels stale %s approval even if the new prompt text repeats",
     async (mode) => {

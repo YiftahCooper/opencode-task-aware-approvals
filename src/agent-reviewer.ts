@@ -1,4 +1,5 @@
 import type { PluginConfiguration } from "./config.js";
+import { withTimeout } from "./deadline.js";
 import {
   OversizeError,
   parseVerdict,
@@ -50,36 +51,53 @@ export class AgentReviewer implements Reviewer {
         `Operation too large for the agent reviewer (${bytes.toLocaleString("en-US")} bytes, limit ${maxInputBytes.toLocaleString("en-US")}).`,
       );
     }
-    const { sessionID } = await this.#client.create({
+    const deadline = Date.now() + this.#configuration.reviewer.timeoutMs;
+    let expired = false;
+    const creating = this.#client.create({
       model: this.#configuration.reviewer.agent.model ?? input.model,
     });
+    void creating
+      .then(async ({ sessionID }) => {
+        if (!expired) return;
+        await withTimeout({
+          operation: this.#client.abort({ sessionID }).catch(() => undefined),
+          timeoutMs: 2000,
+        }).catch(() => undefined);
+        await withTimeout({
+          operation:
+            this.#client.remove?.({ sessionID }).catch(() => undefined) ?? Promise.resolve(),
+          timeoutMs: 2000,
+        }).catch(() => undefined);
+      })
+      .catch(() => undefined);
+    let sessionID: string;
+    try {
+      sessionID = (await withTimeout({ operation: creating, timeoutMs: deadline - Date.now() }))
+        .sessionID;
+    } catch (error) {
+      expired = true;
+      throw error;
+    }
     this.#reviewerSessionIDs.add(sessionID);
 
     try {
       const response = await withTimeout({
         operation: this.#client.prompt({ sessionID, text }),
-        timeoutMs: this.#configuration.reviewer.timeoutMs,
+        timeoutMs: deadline - Date.now(),
       });
       return parseVerdict(response, check);
     } catch (error) {
-      void this.#client.abort({ sessionID }).catch(() => undefined);
+      await withTimeout({
+        operation: this.#client.abort({ sessionID }).catch(() => undefined),
+        timeoutMs: 2000,
+      }).catch(() => undefined);
       throw error;
     } finally {
+      await withTimeout({
+        operation: this.#client.remove?.({ sessionID }).catch(() => undefined) ?? Promise.resolve(),
+        timeoutMs: 2000,
+      }).catch(() => undefined);
       this.#reviewerSessionIDs.delete(sessionID);
     }
-  }
-}
-
-async function withTimeout<T>(input: { operation: Promise<T>; timeoutMs: number }): Promise<T> {
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      input.operation,
-      new Promise<T>((_resolve, reject) => {
-        timeout = setTimeout(() => reject(new Error("Reviewer timed out.")), input.timeoutMs);
-      }),
-    ]);
-  } finally {
-    if (timeout) clearTimeout(timeout);
   }
 }

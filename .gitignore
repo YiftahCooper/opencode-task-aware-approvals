@@ -239,3 +239,14 @@ rulesync.local.jsonc
 **/.opencode/plugins/rulesync-hooks.js
 !.rulesync/.aiignore
 # End of Rulesync
+
+# Disposable work and private runtime evidence
+.backup-scratch/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+/qualification/
+/releases/
+/selection*.json
+/installation.json
+/trusted.json

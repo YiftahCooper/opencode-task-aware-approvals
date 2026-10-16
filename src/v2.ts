@@ -25,8 +25,12 @@ const pluginID = "opencode-auto-approval-plugin";
 type Context = Plugin.Context;
 
 /** V2 model references use `id`; the plugin configuration keeps V1's `modelID`. */
-function toModelRef(model: ModelReference): { providerID: string; id: string } {
-  return { providerID: model.providerID, id: model.modelID };
+function toModelRef(model: ModelReference): { providerID: string; id: string; variant?: string } {
+  return {
+    providerID: model.providerID,
+    id: model.modelID,
+    ...(model.variant ? { variant: model.variant } : {}),
+  };
 }
 
 function fromModelRef(
@@ -73,6 +77,7 @@ export function createV2SessionClient(context: Context): ReviewSessionClient {
         .join("\n");
     },
     abort: ({ sessionID }) => context.session.interrupt({ sessionID }),
+    remove: ({ sessionID }) => context.session.remove({ sessionID }),
   };
 }
 
@@ -148,6 +153,13 @@ export function createV2Plugin(dependencies: PluginDependencies): Plugin.Plugin 
         await context.permission.hook("evaluate", async (event) => {
           if (event.effect !== "ask" || isReviewer(event)) return;
 
+          const snapshot = JSON.stringify({
+            sessionID: event.sessionID,
+            action: event.action,
+            resources: event.resources,
+            metadata: event.metadata,
+            agent: event.agent,
+          });
           const revision = revisions.get(event.sessionID);
           const decision = await reviewForApproval({
             reviewer,
@@ -155,12 +167,25 @@ export function createV2Plugin(dependencies: PluginDependencies): Plugin.Plugin 
               source: "permission-request",
               sessionID: event.sessionID,
               action: event.action,
-              resource: { resources: event.resources, metadata: event.metadata },
+              resource: structuredClone({ resources: event.resources, metadata: event.metadata }),
               ...(await conversation(event.sessionID)),
               model: await sessionModel(event.sessionID),
             },
           });
-          if (decision === undefined || revisions.get(event.sessionID) !== revision) return;
+          if (
+            decision === undefined ||
+            revisions.get(event.sessionID) !== revision ||
+            event.effect !== "ask" ||
+            snapshot !==
+              JSON.stringify({
+                sessionID: event.sessionID,
+                action: event.action,
+                resources: event.resources,
+                metadata: event.metadata,
+                agent: event.agent,
+              })
+          )
+            return;
           event.effect = "allow";
           event.message = decision.reason;
         });

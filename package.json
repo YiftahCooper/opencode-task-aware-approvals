@@ -1,7 +1,7 @@
 {
-  "name": "opencode-auto-approval-plugin",
-  "version": "0.7.0",
-  "description": "opencode plugin that auto-approves tool permission requests based on configurable rules",
+  "name": "opencode-task-aware-approvals",
+  "version": "0.8.0-taskaware.1",
+  "description": "Task-aware on-ask approvals for OpenCode V2 with build-bound reviewer qualification",
   "keywords": [
     "opencode",
     "opencode-plugin",
@@ -10,19 +10,29 @@
     "auto-approval",
     "typescript"
   ],
-  "homepage": "https://github.com/dyoshikawa/opencode-auto-approval-plugin#readme",
+  "homepage": "https://github.com/YiftahCooper/opencode-task-aware-approvals#readme",
   "bugs": {
-    "url": "https://github.com/dyoshikawa/opencode-auto-approval-plugin/issues"
+    "url": "https://github.com/YiftahCooper/opencode-task-aware-approvals/issues"
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/dyoshikawa/opencode-auto-approval-plugin.git"
+    "url": "https://github.com/YiftahCooper/opencode-task-aware-approvals.git"
   },
   "license": "MIT",
   "author": "dyoshikawa",
   "type": "module",
   "exports": {
     ".": {
+      "import": {
+        "types": "./dist/task-aware.d.ts",
+        "default": "./dist/task-aware.js"
+      },
+      "require": {
+        "types": "./dist/task-aware.d.cts",
+        "default": "./dist/task-aware.cjs"
+      }
+    },
+    "./legacy": {
       "import": {
         "types": "./dist/index.d.ts",
         "default": "./dist/index.js"
@@ -33,43 +43,44 @@
       }
     }
   },
-  "main": "dist/index.cjs",
-  "module": "dist/index.js",
-  "types": "dist/index.d.ts",
-  "bin": {
-    "opencode-auto-approval-plugin": "dist/bin.js"
-  },
+  "main": "dist/task-aware.cjs",
+  "module": "dist/task-aware.js",
+  "types": "dist/task-aware.d.ts",
   "files": [
-    "dist"
+    "dist",
+    "server.js",
+    "scripts/manage.mjs",
+    "scripts/artifact.mjs",
+    "README.md",
+    "TASK-AWARE.md",
+    "LICENSE"
   ],
   "scripts": {
-    "build": "tsdown",
-    "check": "pnpm run fmt:check && pnpm run oxlint && pnpm run typecheck",
-    "cicheck": "pnpm run cicheck:code && pnpm run cicheck:content",
-    "cicheck:code": "pnpm run check && pnpm run test",
-    "cicheck:content": "pnpm run cspell && pnpm run secretlint",
+    "build": "node scripts/build-id.mjs && tsdown && node scripts/stamp-build.mjs",
+    "check": "corepack pnpm@10.30.3 run fmt:check && corepack pnpm@10.30.3 run oxlint && corepack pnpm@10.30.3 run typecheck",
+    "cicheck": "corepack pnpm@10.30.3 run cicheck:code && corepack pnpm@10.30.3 run cicheck:content",
+    "cicheck:code": "corepack pnpm@10.30.3 run check && corepack pnpm@10.30.3 run test",
+    "cicheck:content": "corepack pnpm@10.30.3 run cspell && corepack pnpm@10.30.3 run secretlint",
     "cspell": "cspell --no-progress --gitignore .",
-    "fix": "pnpm run fmt && pnpm run oxlint:fix",
+    "fix": "corepack pnpm@10.30.3 run fmt && corepack pnpm@10.30.3 run oxlint:fix",
     "fmt": "oxfmt .",
     "fmt:check": "oxfmt --check .",
     "generate": "rulesync generate",
     "knip": "knip",
     "oxlint": "oxlint . --max-warnings 0",
     "oxlint:fix": "oxlint . --fix --max-warnings 0",
-    "prepare": "simple-git-hooks && pnpm generate",
-    "prepublishOnly": "pnpm build",
     "secretlint": "secretlint --secretlintignore .gitignore \"**/*\"",
     "sort": "sort-package-json",
     "test": "vitest run --silent=true",
     "test:coverage": "vitest run --coverage --silent=true",
     "test:watch": "vitest --silent=true",
-    "typecheck": "tsc --noEmit"
-  },
-  "simple-git-hooks": {
-    "pre-commit": "pnpm exec lint-staged"
+    "typecheck": "tsc --noEmit",
+    "test:distribution": "node --test tests/install.test.mjs tests/distribution.test.mjs",
+    "package:release": "node scripts/package.mjs"
   },
   "dependencies": {
-    "zod": "4.6.7"
+    "zod": "4.6.7",
+    "jsonc-parser": "3.3.1"
   },
   "devDependencies": {
     "@opencode-ai/plugin": "1.19.0",
@@ -108,7 +119,8 @@
     "node": ">=22.0.0",
     "pnpm": ">=10"
   },
-  "publishConfig": {
-    "access": "public"
-  }
+  "contributors": [
+    "YiftahCooper"
+  ],
+  "packageManager": "pnpm@10.30.3"
 }

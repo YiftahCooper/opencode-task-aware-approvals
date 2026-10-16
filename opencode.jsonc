@@ -1,15 +1,1 @@
-{
-  "$schema": "https://opencode.ai/config.json",
-  "mcp": {
-    "deepwiki": {
-      "type": "remote",
-      "url": "https://mcp.deepwiki.com/mcp",
-      "enabled": true
-    }
-  },
-  "instructions": [
-    ".github/workflows/AGENTS.md",
-    ".opencode/memories/coding-guidelines.md",
-    ".opencode/memories/testing-guidelines.md"
-  ]
-}
+{}

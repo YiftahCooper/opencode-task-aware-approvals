@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { AgentReviewer } from "./agent-reviewer.js";
 import { parsePluginConfiguration } from "./config.js";
@@ -243,4 +243,35 @@ describe("AgentReviewer", () => {
       reviewer.review({ source: "tool-call", sessionID: "main", action: "read", resource: {} }),
     ).rejects.toThrow("lacked the review check");
   });
+});
+
+it("bounds session creation and cleans up a session that resolves after timeout", async () => {
+  let finish!: (v: { sessionID: string }) => void;
+  const abort = vi.fn(async () => undefined);
+  const remove = vi.fn(async () => undefined);
+  const reviewer = new AgentReviewer({
+    configuration: parsePluginConfiguration({ options: { reviewer: { timeoutMs: 10 } } }),
+    client: {
+      create: () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+      prompt: async () => "",
+      abort,
+      remove,
+    },
+  });
+  await expect(
+    reviewer.review({
+      source: "permission-request",
+      sessionID: "root",
+      action: "shell",
+      resource: { command: "printf test" },
+      userIntent: "Print test",
+    }),
+  ).rejects.toThrow(/timed out/i);
+  finish({ sessionID: "late" });
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  expect(abort).toHaveBeenCalledWith({ sessionID: "late" });
+  expect(remove).toHaveBeenCalledWith({ sessionID: "late" });
 });

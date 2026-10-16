@@ -30,7 +30,7 @@ jobs:
           experimental: true
 
       - name: Install dependencies
-        run: pnpm install --ignore-scripts
+        run: pnpm install --frozen-lockfile --ignore-scripts
 
       - name: Check no files generated
         run: |
@@ -55,9 +55,11 @@ jobs:
             exit 1
           fi
 
-      - name: Check build artifacts
-        run: |
-          test -f dist/index.js
-          test -f dist/index.cjs
-          test -f dist/index.d.ts
-          test -f dist/index.d.cts
+      - name: Installer, packaged entrypoints and release transaction checks
+        run: pnpm test:distribution
+
+      - name: Host harness unit checks (no OpenCode binary or model calls)
+        run: python3 -m unittest discover -s tests/host -p 'test_helpers.py'
+
+      # V2 2.0.30 has no upstream release asset. Real-host acceptance requires
+      # an explicitly supplied installed V2 binary; see TASK-AWARE.md.

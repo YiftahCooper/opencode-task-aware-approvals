@@ -2,8 +2,9 @@ import { defineConfig } from "tsdown";
 
 export default defineConfig([
   {
-    entry: ["src/index.ts"],
+    entry: ["src/index.ts", "src/task-aware.ts"],
     format: ["cjs", "esm"],
+    outputOptions: { exports: "named" },
     dts: true,
     clean: true,
     fixedExtension: false,

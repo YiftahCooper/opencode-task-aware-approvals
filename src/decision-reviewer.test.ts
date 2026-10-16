@@ -661,7 +661,7 @@ describe("DecisionReviewer with long context", () => {
     const responses = [
       Response.json({ detail: { error_type: "max_tokens_exceeded" } }, { status: 400 }),
       Response.json({
-        answers: { verdict: { choice: "allow", probabilities: { allow: 0.85 } } },
+        answers: { verdict: { choice: "allow", probabilities: { allow: 0.7 } } },
         usage: { input_tokens: 500 },
       }),
     ];
@@ -670,13 +670,52 @@ describe("DecisionReviewer with long context", () => {
       response: async () => responses.shift() ?? Response.error(),
     });
 
+    // 0.7 passes the regular threshold but not the long-context one.
     await expect(reviewer.review(request)).resolves.toMatchObject({
-      verdict: "allow",
-      reason: expect.stringMatching(/^jev-latest with long context chose allow/),
+      verdict: "escalate",
+      reason: expect.stringMatching(
+        /^jev-latest with long context leaned allow at 0\.70, below the 0\.80 threshold/,
+      ),
     });
     expect(fetch).toHaveBeenCalledTimes(2);
     expect(new Headers(fetch.mock.calls[0]?.[1]?.headers).has(LONG_CONTEXT)).toBe(false);
     expect(new Headers(fetch.mock.calls[1]?.[1]?.headers).get(LONG_CONTEXT)).toBe("true");
+  });
+
+  it("keeps the first refusal when the long-context retry fails", async () => {
+    const responses = [
+      Response.json({ detail: { error_type: "max_tokens_exceeded" } }, { status: 400 }),
+      Response.json({ detail: "forbidden" }, { status: 403 }),
+    ];
+    const { reviewer, fetch } = longContextReviewer({
+      longContext: true,
+      response: async () => responses.shift() ?? Response.error(),
+    });
+
+    const review = reviewer.review(request);
+    await expect(review).rejects.toBeInstanceOf(OversizeError);
+    await expect(review).rejects.toThrow(
+      "Operation too large for jev-latest (refused by the API).",
+    );
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retry when too little of the timeout is left", async () => {
+    vi.useFakeTimers();
+    try {
+      const { reviewer, fetch } = longContextReviewer({
+        longContext: true,
+        response: async () => {
+          vi.advanceTimersByTime(29_500);
+          return Response.json({ detail: { error_type: "max_tokens_exceeded" } }, { status: 400 });
+        },
+      });
+
+      await expect(reviewer.review(request)).rejects.toBeInstanceOf(OversizeError);
+      expect(fetch).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("does not ask again without long context", async () => {
@@ -710,6 +749,8 @@ describe("DecisionReviewer with long context", () => {
         Response.json({ detail: { error_type: "max_tokens_exceeded" } }, { status: 400 }),
     });
 
-    await expect(reviewer.review(largeRequest)).rejects.toBeInstanceOf(OversizeError);
+    await expect(reviewer.review(largeRequest)).rejects.toThrow(
+      "Operation too large for jev-latest with long context (refused by the API).",
+    );
   });
 });

@@ -76,6 +76,9 @@ const usageSchema = z.object({
  */
 const LONG_CONTEXT_HEADER = "TypeSafe-Danger-Zone-Long-Context";
 
+/** A long-context retry with less time left than this would only time out. */
+const MIN_RETRY_MS = 1_000;
+
 /** Workers AI wraps every answer in its API envelope. */
 const cloudflareEnvelopeSchema = z.object({ result: z.unknown() });
 
@@ -185,7 +188,9 @@ export class DecisionReviewer implements Reviewer {
     if (!result.ok) {
       // A smaller request would only be a partial view.
       if (isRefusedAsTooLong(result)) {
-        throw new OversizeError(`Operation too large for ${model} (refused by the API).`);
+        throw new OversizeError(
+          `Operation too large for ${model}${long ? " with long context" : ""} (refused by the API).`,
+        );
       }
       // 402 means the account is out of credit, 429 rate limited, 5xx an outage.
       throw new Error(`Decision model request failed with HTTP ${result.status}.`);
@@ -209,7 +214,9 @@ export class DecisionReviewer implements Reviewer {
   /**
    * Sends the review, with long context when asked. A regular request that Jev
    * refuses as too long (the estimate fell short of its limit) is asked once
-   * more with long context when that is on, within the same timeout.
+   * more with long context when that is on, within the same timeout. When too
+   * little time is left, or that second request fails for any other reason,
+   * the first refusal stands, so the operation still goes to `onOversize`.
    */
   async #send(input: {
     state: unknown;
@@ -224,8 +231,15 @@ export class DecisionReviewer implements Reviewer {
     ) {
       return { result, long: input.long };
     }
-    const timeoutMs = Math.max(1, deadline - Date.now());
-    return { result: await this.#post({ state: input.state, long: true, timeoutMs }), long: true };
+    const timeoutMs = deadline - Date.now();
+    if (timeoutMs < MIN_RETRY_MS) return { result, long: false };
+    try {
+      const retried = await this.#post({ state: input.state, long: true, timeoutMs });
+      if (retried.ok || isRefusedAsTooLong(retried)) return { result: retried, long: true };
+    } catch {
+      // A timeout or network failure: the first refusal decides.
+    }
+    return { result, long: false };
   }
 
   #post(input: { state: unknown; long: boolean; timeoutMs: number }): Promise<PostResult> {

@@ -257,7 +257,8 @@ per question and per request (Jev 1.13 and 1.14), at the same price per token. W
 `reviewer.decision.longContext` set, an operation whose estimate exceeds `maxStateTokens` is sent
 whole with that header instead of being too large, up to `longContext.maxStateTokens`; smaller
 operations are still sent without it. If Jev refuses one of those as too long (the estimate fell
-short), it is asked once more with the header, within the same `timeoutMs`.
+short), it is asked once more with the header, within the same `timeoutMs`; with less than a
+second left, or if that second request fails, the refusal stands.
 
 ```jsonc
 "decision": {
@@ -276,7 +277,7 @@ short), it is asked once more with the header, within the same `timeoutMs`.
   those within the regular limit, so only the operations that need it use it. An operation past
   `longContext.maxStateTokens`, or that the API refuses even with the header, is too large and
   follows `onOversize`.
-- A verdict reached this way says so, e.g.
+- A verdict reached this way, including after such a retry, says so, e.g.
   `jev-1.14.0 with long context chose escalate (allow 0.32, deny 0.07, escalate 0.61).` A single
   dangerous line is easier to miss in a large file, so these answers need a higher `allow`
   probability (0.8 by default) and the threshold cannot be set below the regular one.

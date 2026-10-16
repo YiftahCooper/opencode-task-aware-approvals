@@ -1,7 +1,7 @@
 import * as z from "zod/mini";
 
 import type { DecisionConfiguration, PluginConfiguration } from "./config.js";
-import { type Fetch, postJSON } from "./http.js";
+import { type Fetch, type PostResult, postJSON } from "./http.js";
 import { conversationInstructions, reviewState } from "./review-state.js";
 import type { Reviewer, ReviewRequest, ReviewVerdict } from "./reviewer.js";
 import {
@@ -69,8 +69,26 @@ const usageSchema = z.object({
   ),
 });
 
+/**
+ * TypeSafe's opt-in for Jev's 262k-token context. Sent only on requests
+ * larger than the regular budget: TypeSafe documents long-context answers as
+ * slower and less accurate.
+ */
+const LONG_CONTEXT_HEADER = "TypeSafe-Danger-Zone-Long-Context";
+
+/** A long-context retry with less time left than this would only time out. */
+const MIN_RETRY_MS = 1_000;
+
 /** Workers AI wraps every answer in its API envelope. */
 const cloudflareEnvelopeSchema = z.object({ result: z.unknown() });
+
+/**
+ * Jev answers 400 {"detail":{"error_type":"max_tokens_exceeded"}} for a state
+ * over its limit: the estimate fell short.
+ */
+function isRefusedAsTooLong(result: PostResult): boolean {
+  return !result.ok && result.status === 400 && result.text.includes("max_tokens_exceeded");
+}
 
 export class DecisionReviewer implements Reviewer {
   readonly #configuration: DecisionConfiguration;
@@ -152,36 +170,27 @@ export class DecisionReviewer implements Reviewer {
     tokens: { input: number | null; output: number | null };
   }): Promise<ReviewVerdict> {
     const state = reviewState(input.request);
-    const { model, maxStateTokens } = this.#configuration;
+    const { model, maxStateTokens, longContext } = this.#configuration;
     const serialized = JSON.stringify(state);
     const estimate = estimateTokens(serialized);
-    if (estimate > maxStateTokens) {
+    const needsLongContext = estimate > maxStateTokens && longContext !== undefined;
+    const budget = needsLongContext ? longContext.maxStateTokens : maxStateTokens;
+    if (estimate > budget) {
       // Nothing was sent, so nothing was billed.
       input.tokens.input = 0;
       input.tokens.output = 0;
       throw new OversizeError(
-        `Operation too large for ${model} (about ${estimate.toLocaleString("en-US")} tokens, budget ${maxStateTokens.toLocaleString("en-US")}).`,
+        `Operation too large for ${model} (about ${estimate.toLocaleString("en-US")} tokens, budget ${budget.toLocaleString("en-US")}${needsLongContext ? " with long context" : ""}).`,
       );
     }
 
-    const result = await postJSON({
-      fetch: this.#fetch,
-      url: this.#configuration.endpoint,
-      apiKey: this.#configuration.apiKey,
-      body: {
-        model,
-        state,
-        questions: { verdict: verdictQuestion({ instructions: this.#instructions }) },
-      },
-      timeoutMs: this.#timeoutMs,
-      label: "Decision model",
-    });
+    const { result, long } = await this.#send({ state, long: needsLongContext });
     if (!result.ok) {
-      // Jev answers 400 {"detail":{"error_type":"max_tokens_exceeded"}} for a
-      // state over its limit: the estimate fell short, and a smaller request
-      // would only be a partial view.
-      if (result.status === 400 && result.text.includes("max_tokens_exceeded")) {
-        throw new OversizeError(`Operation too large for ${model} (refused by the API).`);
+      // A smaller request would only be a partial view.
+      if (isRefusedAsTooLong(result)) {
+        throw new OversizeError(
+          `Operation too large for ${model}${long ? " with long context" : ""} (refused by the API).`,
+        );
       }
       // 402 means the account is out of credit, 429 rate limited, 5xx an outage.
       throw new Error(`Decision model request failed with HTTP ${result.status}.`);
@@ -194,7 +203,59 @@ export class DecisionReviewer implements Reviewer {
       input.tokens.output = usage.data.usage?.output_tokens ?? null;
     }
     assertReadWhole({ model, prompt: serialized, reportedTokens: input.tokens.input });
-    return this.#verdict({ answer: body });
+    const longThreshold = long ? longContext?.minAllowProbability : undefined;
+    return this.#verdict({
+      answer: body,
+      threshold: longThreshold ?? this.#configuration.minAllowProbability,
+      label: long ? `${model} with long context` : model,
+    });
+  }
+
+  /**
+   * Sends the review, with long context when asked. A regular request that Jev
+   * refuses as too long (the estimate fell short of its limit) is asked once
+   * more with long context when that is on, within the same timeout. When too
+   * little time is left, or that second request fails for any other reason,
+   * the first refusal stands, so the operation still goes to `onOversize`.
+   */
+  async #send(input: {
+    state: unknown;
+    long: boolean;
+  }): Promise<{ result: PostResult; long: boolean }> {
+    const deadline = Date.now() + this.#timeoutMs;
+    const result = await this.#post({ ...input, timeoutMs: this.#timeoutMs });
+    if (
+      input.long ||
+      this.#configuration.longContext === undefined ||
+      !isRefusedAsTooLong(result)
+    ) {
+      return { result, long: input.long };
+    }
+    const timeoutMs = deadline - Date.now();
+    if (timeoutMs < MIN_RETRY_MS) return { result, long: false };
+    try {
+      const retried = await this.#post({ state: input.state, long: true, timeoutMs });
+      if (retried.ok || isRefusedAsTooLong(retried)) return { result: retried, long: true };
+    } catch {
+      // A timeout or network failure: the first refusal decides.
+    }
+    return { result, long: false };
+  }
+
+  #post(input: { state: unknown; long: boolean; timeoutMs: number }): Promise<PostResult> {
+    return postJSON({
+      fetch: this.#fetch,
+      url: this.#configuration.endpoint,
+      apiKey: this.#configuration.apiKey,
+      body: {
+        model: this.#configuration.model,
+        state: input.state,
+        questions: { verdict: verdictQuestion({ instructions: this.#instructions }) },
+      },
+      ...(input.long ? { headers: { [LONG_CONTEXT_HEADER]: "true" } } : {}),
+      timeoutMs: input.timeoutMs,
+      label: "Decision model",
+    });
   }
 
   /** Workers AI wraps the System One answer in its API envelope. */
@@ -204,7 +265,13 @@ export class DecisionReviewer implements Reviewer {
     return envelope.success ? envelope.data.result : undefined;
   }
 
-  #verdict(input: { answer: unknown }): ReviewVerdict {
+  #verdict(input: {
+    answer: unknown;
+    /** An `allow` below this probability is escalated. */
+    threshold: number;
+    /** Names the model in the reason. */
+    label: string;
+  }): ReviewVerdict {
     const result = z.safeParse(answerSchema, input.answer);
     if (!result.success) {
       throw new Error("Decision model response did not match the verdict schema.");
@@ -228,21 +295,20 @@ export class DecisionReviewer implements Reviewer {
       : `confidence ${probability.toFixed(2)}`;
 
     // The model always picks an option; a hesitant allow is not an approval.
-    const threshold = this.#configuration.minAllowProbability;
-    const model = this.#configuration.model;
+    const { threshold, label } = input;
     if (answer.choice === "allow" && probability < threshold) {
       return {
         verdict: "escalate",
         ...metadata,
         reason: sanitizeReason(
-          `${model} leaned allow at ${probability.toFixed(2)}, below the ${threshold.toFixed(2)} threshold (${summary}).`,
+          `${label} leaned allow at ${probability.toFixed(2)}, below the ${threshold.toFixed(2)} threshold (${summary}).`,
         ),
       };
     }
     return {
       verdict: answer.choice,
       ...metadata,
-      reason: sanitizeReason(`${model} chose ${answer.choice} (${summary}).`),
+      reason: sanitizeReason(`${label} chose ${answer.choice} (${summary}).`),
     };
   }
 }

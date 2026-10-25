@@ -50,7 +50,7 @@ export function candidates(
       };
       if (
         m.providerID !== provider ||
-        !/^(gpt-|claude-)/.test(m.id) ||
+        !m.id.startsWith("gpt-") ||
         m.enabled === false ||
         !m.capabilities?.tools ||
         !m.variants?.some((v) => v.id === "high")
@@ -100,9 +100,15 @@ export function choose(results: Result[], incumbent?: string): Result | undefine
     return best;
   return current;
 }
+// About 10% of OpenCode Go's estimated GPT 6 Luna allowance (10,560/week, 21,130/30 days).
+export const WEEKLY_CALL_CAP = 1000;
+export const MONTHLY_CALL_CAP = 2000;
 export function reserve(spend: number[], now: number): number[] | undefined {
   const recent = spend.filter((t) => now - t < 30 * DAY);
-  if (recent.length >= 576 || recent.filter((t) => now - t < 7 * DAY).length >= 144)
+  if (
+    recent.length >= MONTHLY_CALL_CAP ||
+    recent.filter((t) => now - t < 7 * DAY).length >= WEEKLY_CALL_CAP
+  )
     return undefined;
   return [...recent, now];
 }
@@ -113,8 +119,8 @@ export function latestResults(results: Result[]): Result[] {
 }
 export function hasCapacity(spend: number[], now: number, count: number): boolean {
   return (
-    spend.filter((t) => now - t < 30 * DAY).length + count <= 576 &&
-    spend.filter((t) => now - t < 7 * DAY).length + count <= 144
+    spend.filter((t) => now - t < 30 * DAY).length + count <= MONTHLY_CALL_CAP &&
+    spend.filter((t) => now - t < 7 * DAY).length + count <= WEEKLY_CALL_CAP
   );
 }
 export function schedule(

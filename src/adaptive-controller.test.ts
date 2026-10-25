@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 
 import { AdaptiveController } from "./adaptive-controller.js";
-import { DAY } from "./adaptive.js";
+import { DAY, MONTHLY_CALL_CAP, WEEKLY_CALL_CAP } from "./adaptive.js";
 import { cases } from "./qualification.js";
 import { SelectionStore } from "./selection-store.js";
 
@@ -72,7 +72,7 @@ it("invalidates changed metadata, respects call budget and stops when unloaded",
   await controller.discover();
   expect((await controller.review(cases[0]!.request)).verdict).toBe("escalate");
   const s = await store.read();
-  s.spend = Array.from({ length: 144 }, () => Date.now());
+  s.spend = Array.from({ length: WEEKLY_CALL_CAP }, () => Date.now());
   await store.write(s);
   await controller.refresh();
   expect(review).toHaveBeenCalledTimes(48);
@@ -86,7 +86,10 @@ it("preserves a passing incumbent and its tested date when a regression is defer
   const old = Date.now() - 8 * 86400_000;
   state.results[0]!.tested = old;
   state.lastBatch = old;
-  state.spend = Array.from({ length: 576 }, (_, i) => Date.now() - (8 + (i % 20)) * 86400_000);
+  state.spend = Array.from(
+    { length: MONTHLY_CALL_CAP },
+    (_, i) => Date.now() - (8 + (i % 20)) * 86400_000,
+  );
   await store.write(state);
   await controller.refresh();
   const after = await store.read();
@@ -231,11 +234,11 @@ it("resumes the later candidate after cooldown rather than completing the week e
 it("defers a candidate unless all 48 calls fit the remaining budget", async () => {
   const { controller, store, review } = await fixture();
   const state = await store.read();
-  state.spend = Array.from({ length: 122 }, () => Date.now());
+  state.spend = Array.from({ length: WEEKLY_CALL_CAP - 24 }, () => Date.now());
   await store.write(state);
   await controller.refresh();
   expect(review).not.toHaveBeenCalled();
-  expect((await store.read()).spend).toHaveLength(122);
+  expect((await store.read()).spend).toHaveLength(WEEKLY_CALL_CAP - 24);
   controller.close();
 });
 it("persists live quota while qualification is held and merges results and spend across controllers", async () => {

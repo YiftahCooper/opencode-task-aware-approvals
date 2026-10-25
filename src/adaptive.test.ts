@@ -8,6 +8,8 @@ import {
   valid,
   fingerprint,
   protocol,
+  MONTHLY_CALL_CAP,
+  WEEKLY_CALL_CAP,
 } from "./adaptive.js";
 
 const model = (id = "gpt-6-luna") => ({
@@ -33,7 +35,7 @@ const result = (overrides = {}) => ({
 });
 
 describe("adaptive qualification", () => {
-  it("only considers enabled GPT/Claude models on the trusted provider with explicit high variant", () => {
+  it("only considers enabled GPT models on the trusted provider with explicit high variant", () => {
     expect(
       candidates(
         [
@@ -46,7 +48,7 @@ describe("adaptive qualification", () => {
         ],
         "opencode-go",
       ),
-    ).toHaveLength(2);
+    ).toHaveLength(1);
   });
   it("fingerprints metadata and protocol, without depending on object key order", () => {
     expect(fingerprint({ a: 1, b: 2 })).toBe(fingerprint({ b: 2, a: 1 }));
@@ -82,12 +84,12 @@ describe("adaptive qualification", () => {
     expect(valid(result({ protocol: "old" }), [candidate()], now)).toBe(false);
   });
   it("reserves failed/interrupted calls durably and respects rolling weekly/monthly caps", () => {
-    const spend = Array.from({ length: 144 }, () => now);
+    const spend = Array.from({ length: WEEKLY_CALL_CAP }, () => now);
     expect(reserve(spend, now)).toBeUndefined();
-    expect(reserve(spend, now + 8 * 86400_000)).toHaveLength(145);
+    expect(reserve(spend, now + 8 * 86400_000)).toHaveLength(WEEKLY_CALL_CAP + 1);
     expect(
       reserve(
-        Array.from({ length: 576 }, (_, i) => now - (8 + (i % 20)) * 86400_000),
+        Array.from({ length: MONTHLY_CALL_CAP }, (_, i) => now - (8 + (i % 20)) * 86400_000),
         now,
       ),
     ).toBeUndefined();

@@ -3,7 +3,7 @@ import { constants } from "node:fs";
 import { mkdir, open, readFile, rename, unlink, lstat, readdir } from "node:fs/promises";
 import { join, dirname } from "node:path";
 
-import type { Result } from "./adaptive.js";
+import { MONTHLY_CALL_CAP, type Result } from "./adaptive.js";
 
 export type SelectionState = {
   version: 1;
@@ -40,7 +40,7 @@ export function parseState(text: string): SelectionState {
     !Number.isInteger(s.generation) ||
     s.generation < 0 ||
     !Array.isArray(s.spend) ||
-    s.spend.length > 576 ||
+    s.spend.length > MONTHLY_CALL_CAP ||
     !s.spend.every(number) ||
     !Array.isArray(s.results) ||
     s.results.length > 100 ||

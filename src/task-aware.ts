@@ -121,9 +121,34 @@ const plugin: Plugin.Plugin = {
             }),
         })
       : undefined;
+    const rootOf = async (sessionID: string): Promise<string | undefined> => {
+      let id = sessionID;
+      for (let depth = 0; depth < 8; depth++) {
+        const session = await context.session.get({ sessionID: id });
+        if (!session.parentID) return id;
+        id = session.parentID;
+      }
+      return undefined;
+    };
     const reviewer: Reviewer = {
       isReviewerSession: ({ sessionID }) => active.has(sessionID),
-      review: async (request) => {
+      review: async (incoming) => {
+        const rootID = await rootOf(incoming.sessionID);
+        if (!rootID)
+          return {
+            verdict: "escalate",
+            reason: "Delegation chain is unresolved; human approval required.",
+          };
+        // A delegated child is judged only against its root session's human authority.
+        const request =
+          rootID === incoming.sessionID
+            ? incoming
+            : {
+                ...incoming,
+                sessionID: rootID,
+                userIntent: epochs.snapshot(rootID, epochs.capture(rootID)).authority?.intent,
+                conversation: undefined,
+              };
         const bound = permissionEpoch.getStore();
         const requestEpoch =
           bound?.sessionID === request.sessionID ? bound.epoch : epochs.capture(request.sessionID);

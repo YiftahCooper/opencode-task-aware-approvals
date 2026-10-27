@@ -1,6 +1,7 @@
 import { expect, it, vi } from "vitest";
 
 import { fingerprint } from "./adaptive.js";
+import { providerIdentity } from "./provider-identity.js";
 
 const { review } = vi.hoisted(() => ({
   review: vi.fn(async () => ({ verdict: "allow", reason: "fixture" })),
@@ -18,7 +19,7 @@ vi.mock("./selection-store.js", async (original) => ({
     JSON.stringify({
       enabled: true,
       providerID: "opencode-go",
-      providerFingerprint: fingerprint({ fixture: true }),
+      providerFingerprint: fingerprint(providerIdentity({ fixture: true })),
     }),
 }));
 

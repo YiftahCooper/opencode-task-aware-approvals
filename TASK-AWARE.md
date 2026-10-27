@@ -4,7 +4,7 @@ This public source fork of dyoshikawa/opencode-auto-approval-plugin 0.7.0 runs i
 
 There is one plugin, with no launcher, daemon or operating-system schedule. Its timer exists only while OpenCode runs. Native allow/deny permissions remain in force. Approval scope is task-specific; privileged or remote actions are not categorically forbidden or automatically authorized.
 
-The reviewer has no tools, and inherited project/global instructions are removed from its reviewer system context. This deliberately keeps both qualification and live decisions to the same bounded single model call. Actions needing evidence that is unavailable in the task/context require human review. A model-written OpenCode child task cannot establish independent authority: sessions with a parentID escalate. As with native coding agents, the trusted host must label user messages correctly; the plugin cannot authenticate a human behind a client that submits model-written text as a root user message.
+The reviewer has no tools, and inherited project/global instructions are removed from its reviewer system context. This deliberately keeps both qualification and live decisions to the same bounded single model call. Actions needing evidence that is unavailable in the task/context require human review. A model-written OpenCode child task cannot establish independent authority: it is reviewed against its root session's authority, not its own. Sessions whose root cannot be resolved, or whose root lacks the required authority, escalate to a human. As with native coding agents, the trusted host must label user messages correctly; the plugin cannot authenticate a human behind a client that submits model-written text as a root user message.
 
 ## Automatic reviewer selection
 

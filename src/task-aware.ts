@@ -10,6 +10,7 @@ import { reviewerAgentName } from "./agent-reviewer.js";
 import { AgentReviewer } from "./agent-reviewer.js";
 import { parsePluginConfiguration } from "./config.js";
 import { withTimeout } from "./deadline.js";
+import { providerIdentity } from "./provider-identity.js";
 import { constrainReviewerContext } from "./reviewer-context.js";
 import type { Reviewer } from "./reviewer.js";
 import { SelectionStore, safeRead } from "./selection-store.js";
@@ -18,6 +19,7 @@ import { trustedCatalog } from "./trusted-catalog.js";
 import { createV2Plugin, createV2SessionClient } from "./v2.js";
 
 export { candidates, fingerprint, protocol } from "./adaptive.js";
+export { providerIdentity } from "./provider-identity.js";
 export { managementStatus } from "./management-status.js";
 export { adoptEvidence } from "./installation-evidence.js";
 
@@ -69,7 +71,7 @@ const plugin: Plugin.Plugin = {
     const catalog = async () => {
       if (!trusted) throw new Error("Reviewer disabled");
       const provider = await context.provider.get({ providerID: trusted.providerID });
-      if (fingerprint(provider.data) !== trusted.providerFingerprint)
+      if (fingerprint(providerIdentity(provider.data)) !== trusted.providerFingerprint)
         throw new Error("Provider configuration changed");
       for (let attempt = 0; attempt < 5; attempt++) {
         const global = await context.model.list({ location: { directory: homedir() } });

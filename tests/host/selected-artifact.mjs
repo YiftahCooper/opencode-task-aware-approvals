@@ -12,7 +12,8 @@ export async function selectedArtifact() {
   if (
     selected.protocol !== `task-aware-v1:${stamp.build}` ||
     typeof selected.candidates !== "function" ||
-    typeof selected.fingerprint !== "function"
+    typeof selected.fingerprint !== "function" ||
+    typeof selected.providerIdentity !== "function"
   )
     throw new Error(
       "Selected artifact does not expose matching qualification identity helpers; rebuild it",

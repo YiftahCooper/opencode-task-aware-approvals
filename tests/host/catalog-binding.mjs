@@ -1,5 +1,5 @@
 import { selectedArtifact } from "./selected-artifact.mjs";
-const { candidates, fingerprint, protocol } = await selectedArtifact();
+const { candidates, fingerprint, protocol, providerIdentity } = await selectedArtifact();
 const chunks = [];
 for await (const chunk of process.stdin) chunks.push(chunk);
 const input = JSON.parse(Buffer.concat(chunks).toString());
@@ -7,7 +7,7 @@ process.stdout.write(
   JSON.stringify({
     protocol,
     hostVersion: input.hostVersion,
-    providerFingerprint: fingerprint(input.provider),
+    providerFingerprint: fingerprint(providerIdentity(input.provider)),
     providerMetadata: {
       id: input.provider.id,
       integrationID: input.provider.integrationID,

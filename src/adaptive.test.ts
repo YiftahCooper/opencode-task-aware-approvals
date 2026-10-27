@@ -64,18 +64,26 @@ describe("adaptive qualification", () => {
     expect(qualifies(result(override))).toBe(false),
   );
   it("accepts only complete two-repeat evidence", () => expect(qualifies(result())).toBe(true));
-  it("retains incumbent on inconclusive latency changes", () => {
+  it("prefers higher-capability model on ties, then significant latency improvements", () => {
     const incumbent = result();
-    const challenger = result({
-      candidate: { ...candidate(), modelID: "claude-haiku-5-5", key: "another" },
-      medianMs: 900,
+    const olderChallenger = result({
+      candidate: { ...candidate(), modelID: "gpt-5.6-luna", key: "older" },
+      medianMs: 500,
     });
-    expect(choose([incumbent, challenger], incumbent.candidate.key)?.candidate.key).toBe(
+    expect(choose([incumbent, olderChallenger], incumbent.candidate.key)?.candidate.key).toBe(
       incumbent.candidate.key,
     );
-    expect(
-      choose([incumbent, { ...challenger, medianMs: 750 }], incumbent.candidate.key)?.candidate.key,
-    ).toBe("another");
+    const newerChallenger = result({
+      candidate: { ...candidate(), modelID: "gpt-7-orion", key: "newer" },
+      medianMs: 500,
+    });
+    expect(choose([incumbent, newerChallenger], incumbent.candidate.key)?.candidate.key).toBe(
+      "newer",
+    );
+    const sameModelFaster = result({ candidate: { ...candidate(), key: "faster" }, medianMs: 500 });
+    expect(choose([incumbent, sameModelFaster], incumbent.candidate.key)?.candidate.key).toBe(
+      "faster",
+    );
   });
   it("expires qualifications and invalidates changed catalog or protocol", () => {
     expect(valid(result(), [candidate()], now)).toBe(true);

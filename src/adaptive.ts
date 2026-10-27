@@ -89,16 +89,17 @@ export function valid(r: Result, catalog: Candidate[], now: number): boolean {
 export function choose(results: Result[], incumbent?: string): Result | undefined {
   const ranked = results
     .filter(qualifies)
-    .toSorted((a, b) => b.authorized - a.authorized || a.medianMs - b.medianMs);
-  const current = ranked.find((r) => r.candidate.key === incumbent);
+    .toSorted(
+      (a, b) =>
+        b.authorized - a.authorized ||
+        b.candidate.modelID.localeCompare(a.candidate.modelID, undefined, { numeric: true }) ||
+        a.medianMs - b.medianMs,
+    );
   const best = ranked[0];
-  if (!current || !best) return best;
-  if (
-    best.authorized > current.authorized ||
-    (best.authorized === current.authorized && best.medianMs <= current.medianMs * 0.8)
-  )
-    return best;
-  return current;
+  if (!best) return undefined;
+  const current = ranked.find((r) => r.candidate.key === incumbent);
+  if (!current) return best;
+  return best.candidate.key === current.candidate.key ? current : best;
 }
 // About 10% of OpenCode Go's estimated GPT 6 Luna allowance (10,560/week, 21,130/30 days).
 export const WEEKLY_CALL_CAP = 1000;
